@@ -1,0 +1,2 @@
+_version.py export-subst
+wsinfer_zoo/_version.py export-subst
