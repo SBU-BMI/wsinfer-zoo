@@ -2,34 +2,61 @@
 
 import dataclasses
 import json
+from pathlib import Path
 
 import click
 
-from wsinfer_zoo.client import list_model_names, load_model_from_name
+from wsinfer_zoo.client import ModelRegistry
 
 
 @click.group()
-def cli():
-    pass
+@click.option(
+    "--registry-file",
+    type=click.Path(path_type=Path),
+    help="Path to the JSON file listing the models in the WSInfer zoo.",
+    default="~/.wsinfer-registry.json",
+    envvar="WSINFER_ZOO_REGISTRY",
+)
+@click.pass_context
+def cli(ctx: click.Context, *, registry_file: Path):
+    registry_file = registry_file.expanduser()
+    if not registry_file.exists():
+        raise click.ClickException(f"registry file not found: {registry_file}")
+    with open(registry_file) as f:
+        d = json.load(f)
+    registry = ModelRegistry.from_dict(d)
+    ctx.ensure_object(dict)
+    ctx.obj["registry"] = registry
+
+
+@cli.command()
+@click.pass_context
+def ls(ctx: click.Context):
+    """List registered models."""
+    registry: ModelRegistry = ctx.obj["registry"]
+    names = registry.model_names
+    click.echo("\n".join(names))
 
 
 @cli.command()
 @click.option(
     "--model-name",
-    type=click.Choice(list_model_names()),
     required=True,
     help="Name of model to get.",
 )
-def get(*, model_name: str):
+@click.pass_context
+def get(ctx: click.Context, *, model_name: str):
     """Retrieve the model and configuration.
 
     Outputs JSON with model configuration, path to the model, and origin of the model.
+    This downloads the pretrained model if necessary.
     """
-    frozenmodel = load_model_from_name(model_name)
-    if frozenmodel.model_path is None:
+    registry: ModelRegistry = ctx.obj["registry"]
+    if model_name not in registry.model_names:
         raise click.ClickException(
-            "Path to the model is unknown. Please contact the developer by creating a new issue on our GitHub repository."
+            f"'{model_name}' not found, available model names are {registry.model_names}"
         )
-    frozenmodel_dict = dataclasses.asdict(frozenmodel)
-    frozenmodel_json_str = json.dumps(frozenmodel_dict)
-    click.echo(frozenmodel_json_str)
+    model = registry.load_model_from_name(model_name)
+    model_dict = dataclasses.asdict(model)
+    model_json = json.dumps(model_dict)
+    click.echo(model_json)

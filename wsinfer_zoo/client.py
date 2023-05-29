@@ -18,27 +18,32 @@ from huggingface_hub import hf_hub_download
 # print("Found these models...")
 # print(models)
 
+# FIXME: consider changing the name of this file because perhaps there will
+# be multiple configs? Or add a key inside the json map 'wsinfer_config'.
 HF_CONFIG_NAME = "config.json"
 # HF_WEIGHTS_NAME = "pytorch_model.bin"
 HF_TORCHSCRIPT_NAME = "torchscript_model_frozen.bin"
 
-# TODO: consider adding the training set to the model name.
-# TODO: where should this state be stored? Here should be fine...
-NAME_TO_HF_ID = {
-    "Breast tumor": "kaczmarj/breast-tumor-resnet34",
-    "Pancancer lymphocytes": "kaczmarj/pancancer-lymphocytes-inceptionv4",
-}
 
-
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass
 class TransformConfiguration:
+    """Container for the transform configuration for a model.
+
+    This is stored in te 'transform' key of 'config.json'.
+    """
+
     resize_size: int
     mean: Tuple[float, float, float]
     std: Tuple[float, float, float]
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass
 class ModelConfiguration:
+    """Container for the configuration of a single model.
+
+    This is from the contents of 'config.json'.
+    """
+
     # FIXME: add fields like author, license, training data, publications, etc.
     num_classes: int
     class_names: Sequence[str]
@@ -53,7 +58,7 @@ class ModelConfiguration:
         raise NotImplementedError()
 
     @classmethod
-    def from_dict(cls, config: Dict):
+    def from_dict(cls, config: Dict) -> "ModelConfiguration":
         # TODO: add validation here...
         num_classes = config["num_classes"]
         patch_size_pixels = config["patch_size_pixels"]
@@ -85,21 +90,25 @@ class ModelConfiguration:
         return round(self.patch_size_pixels * self.spacing_um_px / slide_spacing_um_px)
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass
 class HFInfo:
     repo_id: str
     revision: Optional[str] = None
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass
 class Model:
+    """Container for the downloaded model path and config."""
+
     config: ModelConfiguration
     model_path: str
     hf_info: HFInfo
 
 
-def load_frozen_model_from_hf(repo_id: str, revision: Optional[str] = None) -> Model:
-    """Load a frozen TorchScript model from HuggingFace."""
+def load_torchscript_model_from_hf(
+    repo_id: str, revision: Optional[str] = None
+) -> Model:
+    """Load a TorchScript model from HuggingFace."""
     model_path = hf_hub_download(repo_id, HF_TORCHSCRIPT_NAME, revision=revision)
 
     config_path = hf_hub_download(repo_id, HF_CONFIG_NAME, revision=revision)
@@ -117,17 +126,65 @@ def load_frozen_model_from_hf(repo_id: str, revision: Optional[str] = None) -> M
     return model
 
 
-def list_model_names() -> List[str]:
-    return sorted(NAME_TO_HF_ID.keys())
+@dataclasses.dataclass
+class RegisteredModel:
+    """Container with information about where to find a single model."""
+
+    name: str
+    hf_repo_id: str
+    hf_revision: Optional[str]
 
 
-def get_models_and_hf_repos() -> Dict[str, str]:
-    return NAME_TO_HF_ID.copy()
+@dataclasses.dataclass
+class ModelRegistry:
+    """Registry of models that can be used with WSInfer."""
 
+    models: List[RegisteredModel]
 
-def load_model_from_name(name: str, revision: Optional[str] = None) -> Model:
-    try:
-        repo_id = NAME_TO_HF_ID[name]
-    except KeyError:
-        raise KeyError(f"Unknown name '{name}'")
-    return load_frozen_model_from_hf(repo_id=repo_id, revision=revision)
+    @classmethod
+    def from_dict(cls, config: Dict) -> "ModelRegistry":
+        assert isinstance(config, dict)
+        assert "models" in config.keys()
+        assert isinstance(config["models"], list)
+        assert config["models"]
+
+        # Test that all model items have required keys.
+        for cm in config["models"]:
+            for key in ["name", "hf_repo_id"]:
+                if key not in cm.keys():
+                    raise KeyError(f"required key '{key}' not found in model info")
+
+        # Test if there are any duplicate model names.
+        uniq_names = set(cm["name"] for cm in config["models"])
+        if len(uniq_names) != len(config["models"]):
+            raise ValueError("there are non-unique 'name' values in the model registry")
+
+        models = [
+            RegisteredModel(
+                name=cm["name"],
+                hf_repo_id=cm["hf_repo_id"],
+                hf_revision=cm.get("hf_revision"),
+            )
+            for cm in config["models"]
+        ]
+
+        return cls(models=models)
+
+    @property
+    def model_names(self) -> List[str]:
+        return [m.name for m in self.models]
+
+    @property
+    def model_names_to_info(self) -> Dict[str, RegisteredModel]:
+        return {m.name: m for m in self.models}
+
+    def load_model_from_name(self, name: str) -> Model:
+        try:
+            model_info = self.model_names_to_info[name]
+        except KeyError:
+            raise KeyError(
+                f"Unknown model name '{name}', available models are {self.model_names}."
+            )
+        return load_torchscript_model_from_hf(
+            repo_id=model_info.hf_repo_id, revision=model_info.hf_revision
+        )
