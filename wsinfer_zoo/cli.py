@@ -6,7 +6,7 @@ from pathlib import Path
 
 import click
 
-from wsinfer_zoo.client import ModelRegistry
+from wsinfer_zoo.client import WSINFER_ZOO_REGISTRY_DEFAULT_PATH, ModelRegistry
 
 
 @click.group()
@@ -14,7 +14,7 @@ from wsinfer_zoo.client import ModelRegistry
     "--registry-file",
     type=click.Path(path_type=Path),
     help="Path to the JSON file listing the models in the WSInfer zoo.",
-    default="~/.wsinfer-registry.json",
+    default=WSINFER_ZOO_REGISTRY_DEFAULT_PATH,
     envvar="WSINFER_ZOO_REGISTRY",
 )
 @click.pass_context

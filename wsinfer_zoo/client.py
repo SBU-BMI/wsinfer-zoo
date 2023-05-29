@@ -1,14 +1,14 @@
-"""API to get various models.
-
-How should we have a list of available models? Should they be hardcoded here?
-Maybe. If not hardcoded here, they should be fetched from the web. Or they can
-be specified in a JSON sidecar.
-"""
+"""API to interact with WSInfer model zoo, hosted on HuggingFace."""
 
 import dataclasses
 import json
+from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+import urllib.error
+import urllib.request
 
+import requests
 from huggingface_hub import hf_hub_download
 
 # TODO: we might consider fetching available models from the web.
@@ -23,6 +23,11 @@ from huggingface_hub import hf_hub_download
 HF_CONFIG_NAME = "config.json"
 # HF_WEIGHTS_NAME = "pytorch_model.bin"
 HF_TORCHSCRIPT_NAME = "torchscript_model_frozen.bin"
+
+# URL to the latest model registry.
+WSINFER_ZOO_REGISTRY_URL = "https://raw.githubusercontent.com/SBU-BMI/wsinfer-zoo/main/wsinfer-zoo-registry.json"
+# The path to the registry file.
+WSINFER_ZOO_REGISTRY_DEFAULT_PATH = Path.home() / ".wsinfer-zoo-registry.json"
 
 
 @dataclasses.dataclass
@@ -50,12 +55,6 @@ class ModelConfiguration:
     patch_size_pixels: int
     spacing_um_px: float
     transform: TransformConfiguration
-
-    def get_transform(self):
-        raise NotImplementedError()
-
-    def get_model(self):
-        raise NotImplementedError()
 
     @classmethod
     def from_dict(cls, config: Dict) -> "ModelConfiguration":
@@ -188,3 +187,43 @@ class ModelRegistry:
         return load_torchscript_model_from_hf(
             repo_id=model_info.hf_repo_id, revision=model_info.hf_revision
         )
+
+
+def _remote_registry_is_newer() -> bool:
+    """Return `True` if the remote registry is newer than local, `False` otherwise."""
+    # Local file does not exist, so we should download it.
+    if not WSINFER_ZOO_REGISTRY_DEFAULT_PATH.exists():
+        return True
+
+    url = "https://api.github.com/repos/SBU-BMI/wsinfer-zoo/commits?path=wsinfer-zoo-registry.json&page=1&per_page=1"
+    resp = requests.get(url)
+    if not resp.ok:
+        raise RuntimeError(
+            "could not get the last updated time of the remote model registry file"
+        )
+    remote_commit_date = resp.json()[0]["commit"]["committer"]["date"]
+    if remote_commit_date.endswith("Z"):
+        remote_commit_date = remote_commit_date[:-1] + "+00:00"
+    remote_mtime = datetime.fromisoformat(remote_commit_date)
+
+    # Defaults to local time zone.
+    local_mtime = datetime.fromtimestamp(
+        WSINFER_ZOO_REGISTRY_DEFAULT_PATH.stat().st_mtime
+    ).astimezone()
+
+    remote_is_newer = remote_mtime > local_mtime
+    return remote_is_newer
+
+
+def _download_registry_if_necessary():
+    """Download the wsinfer zoo registry from the web if
+    1. a local version is not found,
+    2. the web version is newer than local.
+    """
+    try:
+        if _remote_registry_is_newer():
+            urllib.request.urlretrieve(
+                WSINFER_ZOO_REGISTRY_URL, WSINFER_ZOO_REGISTRY_DEFAULT_PATH
+            )
+    except (requests.RequestException, urllib.error.URLError) as e:
+        print(f"Could not download most recent registry, error: {e}")
