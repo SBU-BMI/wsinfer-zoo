@@ -1,0 +1,14 @@
+{
+  "models": [
+    {
+      "name": "Breast tumor",
+      "hf_repo_id": "kaczmarj/breast-tumor-resnet34",
+      "hf_revision": null
+    },
+    {
+      "name": "Pancancer lymphocytes",
+      "hf_repo_id": "kaczmarj/pancancer-lymphocytes-inceptionv4",
+      "hf_revision": null
+    }
+  ]
+}
