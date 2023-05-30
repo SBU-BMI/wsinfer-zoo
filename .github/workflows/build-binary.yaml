@@ -1,0 +1,26 @@
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-linux-windows:
+    runs-on: 'ubuntu-latest'
+    steps:
+    - uses: actions/checkout@v2
+    - run: docker run -v "$(pwd):/src" fydeinc/pyinstaller --onefile --name wsinfer_zoo wsinfer_zoo/__main__.py
+    - uses: actions/upload-artifact@v2
+      with:
+        path: dist/*
+  build-macos:
+    runs-on: 'macos-11'
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/setup-python@v2
+      with:
+        python-version: 3.9
+    - run: python -m pip install . pyinstaller
+    - run: pyinstaller --onefile --name wsinfer_zoo wsinfer_zoo/__main__.py
+    - run: ./dist/wsinfer_zoo --help
+    - uses: actions/upload-artifact@v2
+      with:
+        path: dist/*
