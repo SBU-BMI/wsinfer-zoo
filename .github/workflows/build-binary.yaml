@@ -14,7 +14,7 @@ jobs:
     - run: |
         python -m pip install .
         python -m pip freeze > requirements.txt
-        PLATFORMS="win,linux" docker run -v "$(pwd):/src" fydeinc/pyinstaller --onefile --name wsinfer_zoo wsinfer_zoo/__main__.py
+        PLATFORMS="win,linux" docker run -v "$(pwd):/src" -v $(pwd):$(pwd) fydeinc/pyinstaller --onefile --name wsinfer_zoo wsinfer_zoo/__main__.py
     - uses: actions/upload-artifact@v2
       with:
         path: dist/*
