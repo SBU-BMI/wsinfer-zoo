@@ -21,7 +21,7 @@ jobs:
         python-version: 3.9
     - run: python -m pip install . pyinstaller
     - run: pyinstaller --onefile --name wsinfer_zoo-MacOSX-x86_64 wsinfer_zoo/__main__.py
-    - run: ./dist/wsinfer_zoo --help
+    - run: ./dist/wsinfer_zoo-MacOSX-x86_64 --help
     - uses: actions/upload-artifact@v2
       with:
         path: dist/*
