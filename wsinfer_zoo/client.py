@@ -5,8 +5,6 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
-import urllib.error
-import urllib.request
 
 import requests
 from huggingface_hub import hf_hub_download
@@ -222,8 +220,7 @@ def _download_registry_if_necessary():
     """
     try:
         if _remote_registry_is_newer():
-            urllib.request.urlretrieve(
-                WSINFER_ZOO_REGISTRY_URL, WSINFER_ZOO_REGISTRY_DEFAULT_PATH
-            )
-    except (requests.RequestException, urllib.error.URLError) as e:
+            r = requests.get(WSINFER_ZOO_REGISTRY_URL)
+            WSINFER_ZOO_REGISTRY_DEFAULT_PATH.write_bytes(r.content)
+    except requests.RequestException as e:
         print(f"Could not download most recent registry, error: {e}")
