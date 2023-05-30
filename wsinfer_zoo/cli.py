@@ -30,11 +30,16 @@ def cli(ctx: click.Context, *, registry_file: Path):
 
 
 @cli.command()
+@click.option("--as-json", is_flag=True, help="Print as JSON")
 @click.pass_context
-def ls(ctx: click.Context):
+def ls(ctx: click.Context, *, as_json: bool):
     """List registered models."""
     registry: ModelRegistry = ctx.obj["registry"]
-    click.echo("\n".join(str(m) for m in registry.models))
+    if not as_json:
+        click.echo("\n".join(str(m) for m in registry.models))
+    else:
+        for m in registry.models:
+            click.echo(json.dumps(dataclasses.asdict(m)))
 
 
 @cli.command()
