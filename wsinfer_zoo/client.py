@@ -198,7 +198,7 @@ def _remote_registry_is_newer() -> bool:
     url = "https://api.github.com/repos/SBU-BMI/wsinfer-zoo/commits?path=wsinfer-zoo-registry.json&page=1&per_page=1"
     resp = requests.get(url)
     if not resp.ok:
-        raise RuntimeError(
+        raise requests.RequestException(
             "could not get the last updated time of the remote model registry file"
         )
     remote_commit_date = resp.json()[0]["commit"]["committer"]["date"]
