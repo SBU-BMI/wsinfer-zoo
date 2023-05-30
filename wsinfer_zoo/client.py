@@ -21,8 +21,8 @@ from huggingface_hub import hf_hub_download
 # FIXME: consider changing the name of this file because perhaps there will
 # be multiple configs? Or add a key inside the json map 'wsinfer_config'.
 HF_CONFIG_NAME = "config.json"
-# HF_WEIGHTS_NAME = "pytorch_model.bin"
-HF_TORCHSCRIPT_NAME = "torchscript_model_frozen.bin"
+# The name of the torchscript saved file.
+HF_TORCHSCRIPT_NAME = "torchscript_model.pt"
 
 # URL to the latest model registry.
 WSINFER_ZOO_REGISTRY_URL = "https://raw.githubusercontent.com/SBU-BMI/wsinfer-zoo/main/wsinfer-zoo-registry.json"
@@ -129,9 +129,18 @@ def load_torchscript_model_from_hf(
 class RegisteredModel:
     """Container with information about where to find a single model."""
 
-    name: str
+    description: str
     hf_repo_id: str
-    hf_revision: Optional[str]
+    hf_revision: str
+    model_id: int
+
+    def load_model(self) -> Model:
+        return load_torchscript_model_from_hf(
+            repo_id=self.hf_repo_id, revision=self.hf_revision
+        )
+
+    def __str__(self) -> str:
+        return f"{self.model_id:02d} -> {self.description} ({self.hf_repo_id} @ {self.hf_revision})"
 
 
 @dataclasses.dataclass
@@ -139,6 +148,20 @@ class ModelRegistry:
     """Registry of models that can be used with WSInfer."""
 
     models: List[RegisteredModel]
+
+    def __post_init__(self):
+        if len(set(m.model_id for m in self.models)) != len(self.models):
+            raise ValueError("all model ids must be unique")
+
+    @property
+    def model_ids(self) -> List[int]:
+        return [m.model_id for m in self.models]
+
+    def get_model_by_id(self, model_id: int) -> RegisteredModel:
+        for m in self.models:
+            if m.model_id == model_id:
+                return m
+        raise ValueError(f"model not found with ID '{model_id}'.")
 
     @classmethod
     def from_dict(cls, config: Dict) -> "ModelRegistry":
@@ -149,44 +172,21 @@ class ModelRegistry:
 
         # Test that all model items have required keys.
         for cm in config["models"]:
-            for key in ["name", "hf_repo_id"]:
+            for key in ["description", "hf_repo_id", "hf_revision"]:
                 if key not in cm.keys():
                     raise KeyError(f"required key '{key}' not found in model info")
 
-        # Test if there are any duplicate model names.
-        uniq_names = set(cm["name"] for cm in config["models"])
-        if len(uniq_names) != len(config["models"]):
-            raise ValueError("there are non-unique 'name' values in the model registry")
-
         models = [
             RegisteredModel(
-                name=cm["name"],
+                description=cm["description"],
                 hf_repo_id=cm["hf_repo_id"],
                 hf_revision=cm.get("hf_revision"),
+                model_id=cm.get("model_id", model_id),
             )
-            for cm in config["models"]
+            for model_id, cm in enumerate(config["models"])
         ]
 
         return cls(models=models)
-
-    @property
-    def model_names(self) -> List[str]:
-        return [m.name for m in self.models]
-
-    @property
-    def model_names_to_info(self) -> Dict[str, RegisteredModel]:
-        return {m.name: m for m in self.models}
-
-    def load_model_from_name(self, name: str) -> Model:
-        try:
-            model_info = self.model_names_to_info[name]
-        except KeyError:
-            raise KeyError(
-                f"Unknown model name '{name}', available models are {self.model_names}."
-            )
-        return load_torchscript_model_from_hf(
-            repo_id=model_info.hf_repo_id, revision=model_info.hf_revision
-        )
 
 
 def _remote_registry_is_newer() -> bool:

@@ -34,29 +34,31 @@ def cli(ctx: click.Context, *, registry_file: Path):
 def ls(ctx: click.Context):
     """List registered models."""
     registry: ModelRegistry = ctx.obj["registry"]
-    names = registry.model_names
-    click.echo("\n".join(names))
+    click.echo("\n".join(str(m) for m in registry.models))
 
 
 @cli.command()
 @click.option(
-    "--model-name",
+    "--model-id",
     required=True,
-    help="Name of model to get.",
+    help="Number of the model to get. See `ls` to list model numbers",
+    type=int,
 )
 @click.pass_context
-def get(ctx: click.Context, *, model_name: str):
+def get(ctx: click.Context, *, model_id: int):
     """Retrieve the model and configuration.
 
     Outputs JSON with model configuration, path to the model, and origin of the model.
     This downloads the pretrained model if necessary.
     """
     registry: ModelRegistry = ctx.obj["registry"]
-    if model_name not in registry.model_names:
+    if model_id not in registry.model_ids:
         raise click.ClickException(
-            f"'{model_name}' not found, available model names are {registry.model_names}"
+            f"'{model_id}' not found, available models are {registry.model_ids}. Use `wsinfer_zoo ls` to list all models."
         )
-    model = registry.load_model_from_name(model_name)
+
+    registered_model = registry.get_model_by_id(model_id)
+    model = registered_model.load_model()
     model_dict = dataclasses.asdict(model)
     model_json = json.dumps(model_dict)
     click.echo(model_json)
