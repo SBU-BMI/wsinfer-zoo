@@ -8,7 +8,14 @@ jobs:
     runs-on: 'ubuntu-latest'
     steps:
     - uses: actions/checkout@v2
-    - run: PLATFORMS="win,linux" docker run -v "$(pwd):/src" fydeinc/pyinstaller --onefile --name wsinfer_zoo wsinfer_zoo/__main__.py
+    - uses: actions/setup-python@v2
+      with:
+        python-version: 3.9
+    # Create a requirements.txt file so the pyinstaller Docker image installs dependencies.
+    - run: |
+      python -m pip install .
+      python -m pip freeze > requirements.txt
+      PLATFORMS="win,linux" docker run -v "$(pwd):/src" fydeinc/pyinstaller --onefile --name wsinfer_zoo wsinfer_zoo/__main__.py
     - uses: actions/upload-artifact@v2
       with:
         path: dist/*
