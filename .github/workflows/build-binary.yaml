@@ -4,20 +4,33 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-linux-windows:
-    runs-on: 'ubuntu-latest'
+  build-windows:
+    runs-on: 'windows-2019'
     steps:
     - uses: actions/checkout@v2
     - uses: actions/setup-python@v2
       with:
         python-version: 3.9
-    - run: |
-        python -m pip install .
-        python -m pip freeze > requirements.txt
-        PLATFORMS="win,linux" docker run -v "$(pwd):/src" -v $(pwd):$(pwd) fydeinc/pyinstaller --onefile --name wsinfer_zoo wsinfer_zoo/__main__.py
+    - run: python -m pip install . pyinstaller
+    - run: pyinstaller --onefile --name wsinfer_zoo-win64 wsinfer_zoo/__main__.py
+    - run: ./dist/wsinfer_zoo-win64 --help
     - uses: actions/upload-artifact@v2
       with:
         path: dist/*
+  # build-linux:
+  #   runs-on: 'ubuntu-latest'
+  #   steps:
+  #   - uses: actions/checkout@v2
+  #   - uses: actions/setup-python@v2
+  #     with:
+  #       python-version: 3.9
+  #   - run: |
+  #       python -m pip install .
+  #       python -m pip freeze > requirements.txt
+  #       PLATFORMS="linux" docker run -v "$(pwd):/src" -v $(pwd):$(pwd) fydeinc/pyinstaller --onefile --name wsinfer_zoo wsinfer_zoo/__main__.py
+  #   - uses: actions/upload-artifact@v2
+  #     with:
+  #       path: dist/*
   build-macos:
     runs-on: 'macos-11'
     steps:
