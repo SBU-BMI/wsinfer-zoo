@@ -1,24 +1,24 @@
 {
-  "models": [
-    {
+  "models": {
+    "pancancer-lymphocytes-inceptionv4.tcga": {
       "description": "Pancancer lymphocytes",
       "hf_repo_id": "kaczmarj/pancancer-lymphocytes-inceptionv4.tcga",
       "hf_revision": "main"
     },
-    {
+    "breast-tumor-resnet34.tcga-brca": {
       "description": "Breast tumor",
       "hf_repo_id": "kaczmarj/breast-tumor-resnet34.tcga-brca",
       "hf_revision": "main"
     },
-    {
+    "lung-tumor-resnet34.tcga-luad": {
       "description": "Lung tumor",
       "hf_repo_id": "kaczmarj/lung-tumor-resnet34.tcga-luad",
       "hf_revision": "main"
     },
-    {
+    "prostate-tumor-resnet34.tcga-prad": {
       "description": "Prostate tumor",
       "hf_repo_id": "kaczmarj/prostate-tumor-resnet34.tcga-prad",
       "hf_revision": "main"
     }
-  ]
+  }
 }
