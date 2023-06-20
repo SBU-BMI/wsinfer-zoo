@@ -67,7 +67,7 @@ class TransformConfigurationItem:
     """Container for one item in the 'transform' property of the model configuration."""
 
     name: str
-    arguments: Dict[str, Any]
+    arguments: Optional[Dict[str, Any]]
 
 
 @dataclasses.dataclass
@@ -98,7 +98,7 @@ class ModelConfiguration:
         class_names = config["class_names"]
         transform_list: List[Dict[str, Any]] = config["transform"]
         transform = [
-            TransformConfigurationItem(name=t["name"], arguments=t["arguments"])
+            TransformConfigurationItem(name=t["name"], arguments=t.get("arguments"))
             for t in transform_list
         ]
         return cls(
