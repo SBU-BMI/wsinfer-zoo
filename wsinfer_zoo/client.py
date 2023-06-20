@@ -4,8 +4,9 @@ import dataclasses
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
+import jsonschema
 import requests
 from huggingface_hub import hf_hub_download
 
@@ -23,21 +24,50 @@ HF_CONFIG_NAME = "config.json"
 HF_TORCHSCRIPT_NAME = "torchscript_model.pt"
 
 # URL to the latest model registry.
-WSINFER_ZOO_REGISTRY_URL = "https://raw.githubusercontent.com/SBU-BMI/wsinfer-zoo/main/wsinfer-zoo-registry.json"
+WSINFER_ZOO_REGISTRY_URL = "https://raw.githubusercontent.com/SBU-BMI/wsinfer-zoo/main/wsinfer-zoo-registry.json"  # noqa
 # The path to the registry file.
 WSINFER_ZOO_REGISTRY_DEFAULT_PATH = Path.home() / ".wsinfer-zoo-registry.json"
 
 
+_here = Path(__file__).parent.resolve()
+
+# Load schema for model config JSON files.
+MODEL_CONFIG_SCHEMA_PATH = _here / "schemas" / "model-config.schema.json"
+if not MODEL_CONFIG_SCHEMA_PATH.exists():
+    raise FileNotFoundError(
+        f"JSON schema for model configurations not found: {MODEL_CONFIG_SCHEMA_PATH}"
+    )
+with open(MODEL_CONFIG_SCHEMA_PATH) as f:
+    MODEL_CONFIG_SCHEMA = json.load(f)
+
+# Load schema for model zoo file.
+WSINFER_ZOO_SCHEMA_PATH = _here / "schemas" / "wsinfer-zoo-registry.schema.json"
+if not WSINFER_ZOO_SCHEMA_PATH.exists():
+    raise FileNotFoundError(
+        f"JSON schema for wsinfer zoo not found: {WSINFER_ZOO_SCHEMA_PATH}"
+    )
+with open(WSINFER_ZOO_SCHEMA_PATH) as f:
+    WSINFER_ZOO_SCHEMA = json.load(f)
+
+
+class WSInferZooException(Exception):
+    ...
+
+
+class InvalidRegistryConfiguration(WSInferZooException):
+    ...
+
+
+class InvalidModelConfiguration(WSInferZooException):
+    ...
+
+
 @dataclasses.dataclass
-class TransformConfiguration:
-    """Container for the transform configuration for a model.
+class TransformConfigurationItem:
+    """Container for one item in the 'transform' property of the model configuration."""
 
-    This is stored in te 'transform' key of 'config.json'.
-    """
-
-    resize_size: int
-    mean: Tuple[float, float, float]
-    std: Tuple[float, float, float]
+    name: str
+    arguments: Dict[str, Any]
 
 
 @dataclasses.dataclass
@@ -52,19 +82,25 @@ class ModelConfiguration:
     class_names: Sequence[str]
     patch_size_pixels: int
     spacing_um_px: float
-    transform: TransformConfiguration
+    transform: List[TransformConfigurationItem]
 
     @classmethod
     def from_dict(cls, config: Dict) -> "ModelConfiguration":
-        # TODO: add validation here...
+        try:
+            jsonschema.validate(config, schema=MODEL_CONFIG_SCHEMA)
+        except jsonschema.ValidationError as e:
+            raise InvalidModelConfiguration(
+                "Invalid model configuration. See traceback above for details."
+            ) from e
         num_classes = config["num_classes"]
         patch_size_pixels = config["patch_size_pixels"]
         spacing_um_px = config["spacing_um_px"]
         class_names = config["class_names"]
-        tdict = config["transform"]
-        transform = TransformConfiguration(
-            resize_size=tdict["resize_size"], mean=tdict["mean"], std=tdict["std"]
-        )
+        transform_list: List[Dict[str, Any]] = config["transform"]
+        transform = [
+            TransformConfigurationItem(name=t["name"], arguments=t["arguments"])
+            for t in transform_list
+        ]
         return cls(
             num_classes=num_classes,
             patch_size_pixels=patch_size_pixels,
@@ -77,8 +113,9 @@ class ModelConfiguration:
         """Get the size of the patches to extract from the slide to be compatible
         with the patch size and spacing the model expects.
 
-        The model expects images of a particular physical size. This can be calculated with
-        spacing_um_px * patch_size_pixels, and the results units are in micrometers (um).
+        The model expects images of a particular physical size. This can be calculated
+        with spacing_um_px * patch_size_pixels, and the results units are in
+        micrometers (um).
 
         The native spacing of a slide can be different than what the model expects, so
         patches should be extracted at a different size and rescaled to the pixel size
@@ -89,6 +126,8 @@ class ModelConfiguration:
 
 @dataclasses.dataclass
 class HFInfo:
+    """Container for information on model's location on HuggingFace Hub."""
+
     repo_id: str
     revision: Optional[str] = None
 
@@ -127,10 +166,10 @@ def load_torchscript_model_from_hf(
 class RegisteredModel:
     """Container with information about where to find a single model."""
 
+    name: str
     description: str
     hf_repo_id: str
     hf_revision: str
-    model_id: int
 
     def load_model(self) -> Model:
         return load_torchscript_model_from_hf(
@@ -138,51 +177,43 @@ class RegisteredModel:
         )
 
     def __str__(self) -> str:
-        return f"{self.model_id:02d} -> {self.description} ({self.hf_repo_id} @ {self.hf_revision})"
+        return (
+            f"{self.name} -> {self.description} ({self.hf_repo_id}"
+            f" @ {self.hf_revision})"
+        )
 
 
 @dataclasses.dataclass
 class ModelRegistry:
     """Registry of models that can be used with WSInfer."""
 
-    models: List[RegisteredModel]
+    models: Dict[str, RegisteredModel]
 
-    def __post_init__(self):
-        if len(set(m.model_id for m in self.models)) != len(self.models):
-            raise ValueError("all model ids must be unique")
-
-    @property
-    def model_ids(self) -> List[int]:
-        return [m.model_id for m in self.models]
-
-    def get_model_by_id(self, model_id: int) -> RegisteredModel:
-        for m in self.models:
-            if m.model_id == model_id:
-                return m
-        raise ValueError(f"model not found with ID '{model_id}'.")
+    def get_model_by_name(self, name: str) -> RegisteredModel:
+        try:
+            return self.models[name]
+        except KeyError:
+            raise KeyError(f"model not found with name '{name}'.")
 
     @classmethod
     def from_dict(cls, config: Dict) -> "ModelRegistry":
-        assert isinstance(config, dict)
-        assert "models" in config.keys()
-        assert isinstance(config["models"], list)
-        assert config["models"]
-
-        # Test that all model items have required keys.
-        for cm in config["models"]:
-            for key in ["description", "hf_repo_id", "hf_revision"]:
-                if key not in cm.keys():
-                    raise KeyError(f"required key '{key}' not found in model info")
-
-        models = [
-            RegisteredModel(
-                description=cm["description"],
-                hf_repo_id=cm["hf_repo_id"],
-                hf_revision=cm.get("hf_revision"),
-                model_id=cm.get("model_id", model_id),
+        """Create a new ModelRegistry instance from a dictionary."""
+        try:
+            jsonschema.validate(instance=config, schema=WSINFER_ZOO_SCHEMA)
+        except jsonschema.ValidationError as e:
+            raise InvalidModelConfiguration(
+                "Model configuration is invalid. Read the traceback above for"
+                " more information about the case."
+            ) from e
+        models = {
+            name: RegisteredModel(
+                name=name,
+                description=kwds["description"],
+                hf_repo_id=kwds["hf_repo_id"],
+                hf_revision=kwds["hf_revision"],
             )
-            for model_id, cm in enumerate(config["models"])
-        ]
+            for name, kwds in config["models"].items()
+        }
 
         return cls(models=models)
 
@@ -193,7 +224,7 @@ def _remote_registry_is_newer() -> bool:
     if not WSINFER_ZOO_REGISTRY_DEFAULT_PATH.exists():
         return True
 
-    url = "https://api.github.com/repos/SBU-BMI/wsinfer-zoo/commits?path=wsinfer-zoo-registry.json&page=1&per_page=1"
+    url = "https://api.github.com/repos/SBU-BMI/wsinfer-zoo/commits?path=wsinfer-zoo-registry.json&page=1&per_page=1"  # noqa
     resp = requests.get(url)
     if not resp.ok:
         raise requests.RequestException(
