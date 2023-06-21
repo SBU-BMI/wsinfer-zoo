@@ -4,6 +4,7 @@ import dataclasses
 import json
 from datetime import datetime
 from pathlib import Path
+import sys
 from typing import Any, Dict, List, Optional, Sequence
 
 import jsonschema
@@ -24,7 +25,14 @@ WSINFER_ZOO_REGISTRY_URL = "https://raw.githubusercontent.com/SBU-BMI/wsinfer-zo
 # The path to the registry file.
 WSINFER_ZOO_REGISTRY_DEFAULT_PATH = Path.home() / ".wsinfer-zoo-registry.json"
 
-_here = Path(__file__).parent.resolve()
+# In pyinstaller runtime for one-file executables, the root path
+# is the path to the executable.
+if getattr(sys, "frozen", False) and getattr(sys, "_MEIPASS", False):
+    _here = Path(sys._MEIPASS).resolve()  # type: ignore
+else:
+    _here = Path(__file__).parent.resolve()
+
+print("HERE", _here)
 
 
 class WSInferZooException(Exception):
