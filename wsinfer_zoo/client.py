@@ -32,8 +32,6 @@ if getattr(sys, "frozen", False) and getattr(sys, "_MEIPASS", False):
 else:
     _here = Path(__file__).parent.resolve()
 
-print("HERE", _here)
-
 
 class WSInferZooException(Exception):
     ...
