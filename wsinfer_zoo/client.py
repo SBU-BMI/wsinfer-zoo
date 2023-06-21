@@ -22,6 +22,10 @@ from huggingface_hub import hf_hub_download
 HF_CONFIG_NAME = "config.json"
 # The name of the torchscript saved file.
 HF_TORCHSCRIPT_NAME = "torchscript_model.pt"
+# The name of the safetensors file with weights.
+HF_WEIGHTS_SAFETENSORS_NAME = "model.safetensors"
+# The name of the pytorch (pickle) file with weights.
+HF_WEIGHTS_PICKLE_NAME = "pytorch_model.bin"
 
 # URL to the latest model registry.
 WSINFER_ZOO_REGISTRY_URL = "https://raw.githubusercontent.com/SBU-BMI/wsinfer-zoo/main/wsinfer-zoo-registry.json"  # noqa
@@ -78,11 +82,16 @@ class ModelConfiguration:
     """
 
     # FIXME: add fields like author, license, training data, publications, etc.
+    architecture: str
     num_classes: int
     class_names: Sequence[str]
     patch_size_pixels: int
     spacing_um_px: float
     transform: List[TransformConfigurationItem]
+
+    def __post_init__(self):
+        if len(self.class_names) != self.num_classes:
+            raise InvalidModelConfiguration()
 
     @classmethod
     def from_dict(cls, config: Dict) -> "ModelConfiguration":
@@ -92,6 +101,7 @@ class ModelConfiguration:
             raise InvalidModelConfiguration(
                 "Invalid model configuration. See traceback above for details."
             ) from e
+        architecture = config["architecture"]
         num_classes = config["num_classes"]
         patch_size_pixels = config["patch_size_pixels"]
         spacing_um_px = config["spacing_um_px"]
@@ -102,6 +112,7 @@ class ModelConfiguration:
             for t in transform_list
         ]
         return cls(
+            architecture=architecture,
             num_classes=num_classes,
             patch_size_pixels=patch_size_pixels,
             spacing_um_px=spacing_um_px,
@@ -134,16 +145,33 @@ class HFInfo:
 
 @dataclasses.dataclass
 class Model:
-    """Container for the downloaded model path and config."""
-
     config: ModelConfiguration
     model_path: str
+
+
+@dataclasses.dataclass
+class HFModel(Model):
+    """Container for a model hosted on HuggingFace."""
+
     hf_info: HFInfo
+
+
+@dataclasses.dataclass
+class HFModelTorchScript(HFModel):
+    """Container for the downloaded model path and config."""
+
+
+# This is here to avoid confusion. We could have used Model directly with
+# weights files, but then downstream it would not be clear whether the
+# model has torchscript files or weights files.
+@dataclasses.dataclass
+class HFModelWeightsOnly(HFModel):
+    """Container for a model with weights only (not a TorchScript model)."""
 
 
 def load_torchscript_model_from_hf(
     repo_id: str, revision: Optional[str] = None
-) -> Model:
+) -> HFModelTorchScript:
     """Load a TorchScript model from HuggingFace."""
     model_path = hf_hub_download(repo_id, HF_TORCHSCRIPT_NAME, revision=revision)
 
@@ -155,10 +183,33 @@ def load_torchscript_model_from_hf(
             f"Expected configuration to be a dict but got {type(config_dict)}"
         )
     config = ModelConfiguration.from_dict(config_dict)
-    del config_dict
     # FIXME: should we always load on cpu?
     hf_info = HFInfo(repo_id=repo_id, revision=revision)
-    model = Model(config=config, model_path=model_path, hf_info=hf_info)
+    model = HFModelTorchScript(config=config, model_path=model_path, hf_info=hf_info)
+    return model
+
+
+def load_weights_from_hf(
+    repo_id: str, revision: Optional[str] = None, safetensors: bool = False
+) -> HFModelWeightsOnly:
+    """Load model weights from HuggingFace (this is not TorchScript)."""
+    if safetensors:
+        model_path = hf_hub_download(
+            repo_id, HF_WEIGHTS_SAFETENSORS_NAME, revision=revision
+        )
+    else:
+        model_path = hf_hub_download(repo_id, HF_WEIGHTS_PICKLE_NAME, revision=revision)
+
+    config_path = hf_hub_download(repo_id, HF_CONFIG_NAME, revision=revision)
+    with open(config_path) as f:
+        config_dict = json.load(f)
+    if not isinstance(config_dict, dict):
+        raise TypeError(
+            f"Expected configuration to be a dict but got {type(config_dict)}"
+        )
+    config = ModelConfiguration.from_dict(config_dict)
+    hf_info = HFInfo(repo_id=repo_id, revision=revision)
+    model = HFModelWeightsOnly(config=config, model_path=model_path, hf_info=hf_info)
     return model
 
 
@@ -171,9 +222,14 @@ class RegisteredModel:
     hf_repo_id: str
     hf_revision: str
 
-    def load_model(self) -> Model:
+    def load_model_torchscript(self) -> HFModelTorchScript:
         return load_torchscript_model_from_hf(
             repo_id=self.hf_repo_id, revision=self.hf_revision
+        )
+
+    def load_model_weights(self, safetensors: bool = False) -> HFModelWeightsOnly:
+        return load_weights_from_hf(
+            repo_id=self.hf_repo_id, revision=self.hf_revision, safetensors=safetensors
         )
 
     def __str__(self) -> str:

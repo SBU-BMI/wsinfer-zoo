@@ -104,7 +104,7 @@ def get(ctx: click.Context, *, model_name: str):
         )
 
     registered_model = registry.get_model_by_name(model_name)
-    model = registered_model.load_model()
+    model = registered_model.load_model_torchscript()
     model_dict = dataclasses.asdict(model)
     model_json = json.dumps(model_dict)
     click.echo(model_json)
@@ -131,3 +131,4 @@ def validate_config(*, input):
         raise InvalidModelConfiguration(
             "The configuration is invalid. Please see the traceback above for details."
         ) from e
+    click.secho("Passed", fg="green")

@@ -2,6 +2,10 @@
     "$schema": "http://json-schema.org/draft-04/schema",
     "type": "object",
     "properties": {
+        "architecture": {
+            "type": "string",
+            "description": "Architecture of the model (Use TIMM names)"
+        },
         "num_classes": {
             "type": "integer",
             "description": "The number of classes the model outputs",
@@ -50,6 +54,7 @@
         }
     },
     "required": [
+        "architecture",
         "num_classes",
         "patch_size_pixels",
         "spacing_um_px",
