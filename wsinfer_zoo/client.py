@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 import sys
 from typing import Any, Dict, List, Optional, Sequence
+import warnings
 
 import jsonschema
 import requests
@@ -313,4 +314,4 @@ def _download_registry_if_necessary():
             r = requests.get(WSINFER_ZOO_REGISTRY_URL)
             WSINFER_ZOO_REGISTRY_DEFAULT_PATH.write_bytes(r.content)
     except requests.RequestException as e:
-        print(f"Could not download most recent registry, error: {e}")
+        warnings.warn(f"Could not download most recent registry, error: {e}")
