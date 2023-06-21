@@ -4,40 +4,82 @@ import dataclasses
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
+import jsonschema
 import requests
 from huggingface_hub import hf_hub_download
 
-# TODO: we might consider fetching available models from the web.
-# from huggingface_hub import HfApi
-# hf_api = HfApi()
-# models = hf_api.list_models(author="kaczmarj")
-# print("Found these models...")
-# print(models)
-
-# FIXME: consider changing the name of this file because perhaps there will
-# be multiple configs? Or add a key inside the json map 'wsinfer_config'.
+# The name of the configuration JSON file.
 HF_CONFIG_NAME = "config.json"
 # The name of the torchscript saved file.
 HF_TORCHSCRIPT_NAME = "torchscript_model.pt"
+# The name of the safetensors file with weights.
+HF_WEIGHTS_SAFETENSORS_NAME = "model.safetensors"
+# The name of the pytorch (pickle) file with weights.
+HF_WEIGHTS_PICKLE_NAME = "pytorch_model.bin"
 
 # URL to the latest model registry.
-WSINFER_ZOO_REGISTRY_URL = "https://raw.githubusercontent.com/SBU-BMI/wsinfer-zoo/main/wsinfer-zoo-registry.json"
+WSINFER_ZOO_REGISTRY_URL = "https://raw.githubusercontent.com/SBU-BMI/wsinfer-zoo/main/wsinfer-zoo-registry.json"  # noqa
 # The path to the registry file.
 WSINFER_ZOO_REGISTRY_DEFAULT_PATH = Path.home() / ".wsinfer-zoo-registry.json"
 
+_here = Path(__file__).parent.resolve()
+
+
+class WSInferZooException(Exception):
+    ...
+
+
+class InvalidRegistryConfiguration(WSInferZooException):
+    ...
+
+
+class InvalidModelConfiguration(WSInferZooException):
+    ...
+
+
+def validate_config_json(instance: object):
+    """Raise an error if the model configuration JSON is invalid. Otherwise return True."""
+    schema_path = _here / "schemas" / "model-config.schema.json"
+    if not schema_path.exists():
+        raise FileNotFoundError(
+            f"JSON schema for model configurations not found: {schema_path}"
+        )
+    with open(schema_path) as f:
+        schema = json.load(f)
+    try:
+        jsonschema.validate(instance, schema=schema)
+    except jsonschema.ValidationError as e:
+        raise InvalidModelConfiguration(
+            "Invalid model configuration. See traceback above for details."
+        ) from e
+
+    return True
+
+
+def validate_model_zoo_json(instance: object):
+    """Raise an error if the model zoo registry JSON is invalid. Otherwise return True."""
+    schema_path = _here / "schemas" / "wsinfer-zoo-registry.schema.json"
+    if not schema_path.exists():
+        raise FileNotFoundError(f"JSON schema for wsinfer zoo not found: {schema_path}")
+    with open(schema_path) as f:
+        schema = json.load(f)
+    try:
+        jsonschema.validate(instance, schema=schema)
+    except jsonschema.ValidationError as e:
+        raise InvalidRegistryConfiguration(
+            "Invalid model zoo registry configuration. See traceback above for details."
+        ) from e
+    return True
+
 
 @dataclasses.dataclass
-class TransformConfiguration:
-    """Container for the transform configuration for a model.
+class TransformConfigurationItem:
+    """Container for one item in the 'transform' property of the model configuration."""
 
-    This is stored in te 'transform' key of 'config.json'.
-    """
-
-    resize_size: int
-    mean: Tuple[float, float, float]
-    std: Tuple[float, float, float]
+    name: str
+    arguments: Optional[Dict[str, Any]]
 
 
 @dataclasses.dataclass
@@ -48,24 +90,32 @@ class ModelConfiguration:
     """
 
     # FIXME: add fields like author, license, training data, publications, etc.
+    architecture: str
     num_classes: int
     class_names: Sequence[str]
     patch_size_pixels: int
     spacing_um_px: float
-    transform: TransformConfiguration
+    transform: List[TransformConfigurationItem]
+
+    def __post_init__(self):
+        if len(self.class_names) != self.num_classes:
+            raise InvalidModelConfiguration()
 
     @classmethod
     def from_dict(cls, config: Dict) -> "ModelConfiguration":
-        # TODO: add validation here...
+        validate_config_json(config)
+        architecture = config["architecture"]
         num_classes = config["num_classes"]
         patch_size_pixels = config["patch_size_pixels"]
         spacing_um_px = config["spacing_um_px"]
         class_names = config["class_names"]
-        tdict = config["transform"]
-        transform = TransformConfiguration(
-            resize_size=tdict["resize_size"], mean=tdict["mean"], std=tdict["std"]
-        )
+        transform_list: List[Dict[str, Any]] = config["transform"]
+        transform = [
+            TransformConfigurationItem(name=t["name"], arguments=t.get("arguments"))
+            for t in transform_list
+        ]
         return cls(
+            architecture=architecture,
             num_classes=num_classes,
             patch_size_pixels=patch_size_pixels,
             spacing_um_px=spacing_um_px,
@@ -77,8 +127,9 @@ class ModelConfiguration:
         """Get the size of the patches to extract from the slide to be compatible
         with the patch size and spacing the model expects.
 
-        The model expects images of a particular physical size. This can be calculated with
-        spacing_um_px * patch_size_pixels, and the results units are in micrometers (um).
+        The model expects images of a particular physical size. This can be calculated
+        with spacing_um_px * patch_size_pixels, and the results units are in
+        micrometers (um).
 
         The native spacing of a slide can be different than what the model expects, so
         patches should be extracted at a different size and rescaled to the pixel size
@@ -89,22 +140,41 @@ class ModelConfiguration:
 
 @dataclasses.dataclass
 class HFInfo:
+    """Container for information on model's location on HuggingFace Hub."""
+
     repo_id: str
     revision: Optional[str] = None
 
 
 @dataclasses.dataclass
 class Model:
-    """Container for the downloaded model path and config."""
-
     config: ModelConfiguration
     model_path: str
+
+
+@dataclasses.dataclass
+class HFModel(Model):
+    """Container for a model hosted on HuggingFace."""
+
     hf_info: HFInfo
+
+
+@dataclasses.dataclass
+class HFModelTorchScript(HFModel):
+    """Container for the downloaded model path and config."""
+
+
+# This is here to avoid confusion. We could have used Model directly with
+# weights files, but then downstream it would not be clear whether the
+# model has torchscript files or weights files.
+@dataclasses.dataclass
+class HFModelWeightsOnly(HFModel):
+    """Container for a model with weights only (not a TorchScript model)."""
 
 
 def load_torchscript_model_from_hf(
     repo_id: str, revision: Optional[str] = None
-) -> Model:
+) -> HFModelTorchScript:
     """Load a TorchScript model from HuggingFace."""
     model_path = hf_hub_download(repo_id, HF_TORCHSCRIPT_NAME, revision=revision)
 
@@ -116,10 +186,33 @@ def load_torchscript_model_from_hf(
             f"Expected configuration to be a dict but got {type(config_dict)}"
         )
     config = ModelConfiguration.from_dict(config_dict)
-    del config_dict
     # FIXME: should we always load on cpu?
     hf_info = HFInfo(repo_id=repo_id, revision=revision)
-    model = Model(config=config, model_path=model_path, hf_info=hf_info)
+    model = HFModelTorchScript(config=config, model_path=model_path, hf_info=hf_info)
+    return model
+
+
+def load_weights_from_hf(
+    repo_id: str, revision: Optional[str] = None, safetensors: bool = False
+) -> HFModelWeightsOnly:
+    """Load model weights from HuggingFace (this is not TorchScript)."""
+    if safetensors:
+        model_path = hf_hub_download(
+            repo_id, HF_WEIGHTS_SAFETENSORS_NAME, revision=revision
+        )
+    else:
+        model_path = hf_hub_download(repo_id, HF_WEIGHTS_PICKLE_NAME, revision=revision)
+
+    config_path = hf_hub_download(repo_id, HF_CONFIG_NAME, revision=revision)
+    with open(config_path) as f:
+        config_dict = json.load(f)
+    if not isinstance(config_dict, dict):
+        raise TypeError(
+            f"Expected configuration to be a dict but got {type(config_dict)}"
+        )
+    config = ModelConfiguration.from_dict(config_dict)
+    hf_info = HFInfo(repo_id=repo_id, revision=revision)
+    model = HFModelWeightsOnly(config=config, model_path=model_path, hf_info=hf_info)
     return model
 
 
@@ -127,62 +220,53 @@ def load_torchscript_model_from_hf(
 class RegisteredModel:
     """Container with information about where to find a single model."""
 
+    name: str
     description: str
     hf_repo_id: str
     hf_revision: str
-    model_id: int
 
-    def load_model(self) -> Model:
+    def load_model_torchscript(self) -> HFModelTorchScript:
         return load_torchscript_model_from_hf(
             repo_id=self.hf_repo_id, revision=self.hf_revision
         )
 
+    def load_model_weights(self, safetensors: bool = False) -> HFModelWeightsOnly:
+        return load_weights_from_hf(
+            repo_id=self.hf_repo_id, revision=self.hf_revision, safetensors=safetensors
+        )
+
     def __str__(self) -> str:
-        return f"{self.model_id:02d} -> {self.description} ({self.hf_repo_id} @ {self.hf_revision})"
+        return (
+            f"{self.name} -> {self.description} ({self.hf_repo_id}"
+            f" @ {self.hf_revision})"
+        )
 
 
 @dataclasses.dataclass
 class ModelRegistry:
     """Registry of models that can be used with WSInfer."""
 
-    models: List[RegisteredModel]
+    models: Dict[str, RegisteredModel]
 
-    def __post_init__(self):
-        if len(set(m.model_id for m in self.models)) != len(self.models):
-            raise ValueError("all model ids must be unique")
-
-    @property
-    def model_ids(self) -> List[int]:
-        return [m.model_id for m in self.models]
-
-    def get_model_by_id(self, model_id: int) -> RegisteredModel:
-        for m in self.models:
-            if m.model_id == model_id:
-                return m
-        raise ValueError(f"model not found with ID '{model_id}'.")
+    def get_model_by_name(self, name: str) -> RegisteredModel:
+        try:
+            return self.models[name]
+        except KeyError:
+            raise KeyError(f"model not found with name '{name}'.")
 
     @classmethod
     def from_dict(cls, config: Dict) -> "ModelRegistry":
-        assert isinstance(config, dict)
-        assert "models" in config.keys()
-        assert isinstance(config["models"], list)
-        assert config["models"]
-
-        # Test that all model items have required keys.
-        for cm in config["models"]:
-            for key in ["description", "hf_repo_id", "hf_revision"]:
-                if key not in cm.keys():
-                    raise KeyError(f"required key '{key}' not found in model info")
-
-        models = [
-            RegisteredModel(
-                description=cm["description"],
-                hf_repo_id=cm["hf_repo_id"],
-                hf_revision=cm.get("hf_revision"),
-                model_id=cm.get("model_id", model_id),
+        """Create a new ModelRegistry instance from a dictionary."""
+        validate_model_zoo_json(config)
+        models = {
+            name: RegisteredModel(
+                name=name,
+                description=kwds["description"],
+                hf_repo_id=kwds["hf_repo_id"],
+                hf_revision=kwds["hf_revision"],
             )
-            for model_id, cm in enumerate(config["models"])
-        ]
+            for name, kwds in config["models"].items()
+        }
 
         return cls(models=models)
 
@@ -193,7 +277,7 @@ def _remote_registry_is_newer() -> bool:
     if not WSINFER_ZOO_REGISTRY_DEFAULT_PATH.exists():
         return True
 
-    url = "https://api.github.com/repos/SBU-BMI/wsinfer-zoo/commits?path=wsinfer-zoo-registry.json&page=1&per_page=1"
+    url = "https://api.github.com/repos/SBU-BMI/wsinfer-zoo/commits?path=wsinfer-zoo-registry.json&page=1&per_page=1"  # noqa
     resp = requests.get(url)
     if not resp.ok:
         raise requests.RequestException(
