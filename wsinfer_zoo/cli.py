@@ -6,19 +6,22 @@ import sys
 from pathlib import Path
 
 import click
-import jsonschema
+import huggingface_hub
+import requests
 import tabulate
 
 from wsinfer_zoo.client import (
-    MODEL_CONFIG_SCHEMA,
     WSINFER_ZOO_REGISTRY_DEFAULT_PATH,
-    WSINFER_ZOO_SCHEMA,
+    HF_CONFIG_NAME,
+    HF_WEIGHTS_SAFETENSORS_NAME,
+    HF_WEIGHTS_PICKLE_NAME,
+    HF_TORCHSCRIPT_NAME,
     InvalidModelConfiguration,
     InvalidRegistryConfiguration,
     ModelRegistry,
+    validate_model_zoo_json,
+    validate_config_json,
 )
-
-_here = Path(__file__).parent.resolve()
 
 
 @click.group()
@@ -38,8 +41,8 @@ def cli(ctx: click.Context, *, registry_file: Path):
         d = json.load(f)
     # Raise an error if validation fails.
     try:
-        jsonschema.validate(instance=d, schema=WSINFER_ZOO_SCHEMA)
-    except jsonschema.ValidationError as e:
+        validate_model_zoo_json(d)
+    except InvalidRegistryConfiguration as e:
         raise InvalidRegistryConfiguration(
             "Registry schema is invalid. Please contact the developer by"
             " creating a new issue on our GitHub page:"
@@ -111,14 +114,14 @@ def get(ctx: click.Context, *, model_name: str):
 
 
 @cli.command()
-@click.option(
-    "--input",
-    help="Config file to validate (default is standard input)",
-    type=click.File("r"),
-    default=sys.stdin,
-)
+@click.argument("input", type=click.File("r"))
 def validate_config(*, input):
-    """Validate a model configuration file against the JSON schema."""
+    """Validate a model configuration file against the JSON schema.
+
+    INPUT is the config file to validate.
+
+    Use a dash - to read standard input.
+    """
     try:
         c = json.load(input)
     except Exception as e:
@@ -126,9 +129,117 @@ def validate_config(*, input):
 
     # Raise an error if the schema is not valid.
     try:
-        jsonschema.validate(instance=c, schema=MODEL_CONFIG_SCHEMA)
-    except jsonschema.ValidationError as e:
+        validate_config_json(c)
+    except InvalidRegistryConfiguration as e:
         raise InvalidModelConfiguration(
             "The configuration is invalid. Please see the traceback above for details."
         ) from e
-    click.secho("Passed", fg="green")
+    click.secho("Configuration file is VALID", fg="green")
+
+
+@cli.command()
+@click.argument("huggingface_repo_id")
+@click.option("-r", "--revision", help="Revision to validate", default="main")
+def validate_repo(*, huggingface_repo_id: str, revision: str):
+    """Validate a repository on HuggingFace.
+
+    This checks that the repository contains all of the necessary files and that
+    the configuration JSON file is valid.
+    """
+    repo_id = huggingface_repo_id
+    del huggingface_repo_id
+
+    try:
+        files_in_repo = list(
+            huggingface_hub.list_files_info(repo_id=repo_id, revision=revision)
+        )
+    except huggingface_hub.utils.RepositoryNotFoundError:
+        click.secho(
+            f"Error: huggingface_repo_id '{repo_id}' not found on the HuggingFace Hub",
+            fg="red",
+        )
+        sys.exit(1)
+    except huggingface_hub.utils.RevisionNotFoundError:
+        click.secho(
+            f"Error: revision {revision} not found for repository {repo_id}",
+            fg="red",
+        )
+        sys.exit(1)
+    except requests.RequestException as e:
+        click.echo("Error with request: {e}")
+        click.echo("Please try again.")
+        sys.exit(2)
+
+    file_info = {f.rfilename: f for f in files_in_repo}
+
+    repo_url = f"https://huggingface.co/{repo_id}/tree/{revision}"
+
+    filenames_and_help = [
+        (
+            HF_CONFIG_NAME,
+            "This file is a JSON file with the configuration of the model and includes"
+            " necessary information for how to apply this model to new data. You can"
+            " validate this file with the command 'wsinfer_zoo validate-config'.",
+        ),
+        (
+            HF_TORCHSCRIPT_NAME,
+            "This file is a TorchScript representation of the model and can be made"
+            " with 'torch.jit.script(model)' followed by 'torch.jit.save'. This file"
+            " contains the pre-trained weights as well as a graph of the model."
+            " Importantly, it does not require a Python runtime to be used."
+            f" Then, upload the file to the HuggingFace model repo at {repo_url}",
+        ),
+        (
+            HF_WEIGHTS_PICKLE_NAME,
+            "This file contains the weights of the pre-trained model in normal PyTorch"
+            " format. Once you have a trained model, create this file with"
+            f'\n\n    torch.save(model.state_dict(), "{HF_WEIGHTS_PICKLE_NAME}")'
+            f"\n\n    Then, upload the file to the HuggingFace model repo at {repo_url}",
+        ),
+        (
+            HF_WEIGHTS_SAFETENSORS_NAME,
+            "This file contains the weights of the pre-trained model in SafeTensors"
+            " format. The advantage of this file is that it does not have security"
+            " concerns that Pickle files (pytorch default) have. To create the file:"
+            "\n\n    from safetensors.torch import save_file"
+            f'\n     save_file(model.state_dict(), "{HF_WEIGHTS_SAFETENSORS_NAME}")'
+            f"\n\n    Then, upload the file to the HuggingFace model repo at {repo_url}",
+        ),
+    ]
+
+    invalid = False
+    for name, help_msg in filenames_and_help:
+        if name not in file_info:
+            click.secho(
+                f"Required file '{name}' not found in HuggingFace model repo '{repo_id}'",
+                fg="red",
+            )
+            click.echo(f"    {help_msg}")
+            click.echo("-" * 40)
+            invalid = True
+
+    if invalid:
+        click.secho(
+            f"Model repository {repo_id} is invalid. See above for details.", fg="red"
+        )
+        sys.exit(1)
+
+    config_path = huggingface_hub.hf_hub_download(
+        repo_id, HF_CONFIG_NAME, revision=revision
+    )
+    with open(config_path) as f:
+        config_dict = json.load(f)
+    try:
+        validate_config_json(config_dict)
+    except InvalidModelConfiguration as e:
+        click.secho(
+            "Model configuration JSON file is invalid. Use 'wsinfer_zoo validate-config'"
+            " with the configuration file to debug this further.",
+            fg="red",
+        )
+        click.secho(
+            f"Model repository {repo_id} is invalid. See above for details.", fg="red"
+        )
+        sys.exit(1)
+
+    click.secho(f"Repository {repo_id} is VALID.", fg="green")

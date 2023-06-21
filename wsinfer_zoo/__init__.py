@@ -7,8 +7,8 @@ from wsinfer_zoo.client import (
     _download_registry_if_necessary,
     ModelRegistry,
     WSINFER_ZOO_REGISTRY_DEFAULT_PATH,
-    WSINFER_ZOO_SCHEMA,
     InvalidRegistryConfiguration,
+    validate_model_zoo_json,
 )
 
 __version__ = _version.get_versions()["version"]
@@ -24,8 +24,8 @@ if not WSINFER_ZOO_REGISTRY_DEFAULT_PATH.exists():
 with open(WSINFER_ZOO_REGISTRY_DEFAULT_PATH) as f:
     d = json.load(f)
 try:
-    jsonschema.validate(instance=d, schema=WSINFER_ZOO_SCHEMA)
-except jsonschema.ValidationError as e:
+    validate_model_zoo_json(d)
+except InvalidRegistryConfiguration as e:
     raise InvalidRegistryConfiguration(
         "Registry schema is invalid. Please contact the developer by"
         " creating a new issue on our GitHub page:"

@@ -2,6 +2,13 @@
     "$schema": "http://json-schema.org/draft-04/schema",
     "type": "object",
     "properties": {
+        "spec_version": {
+            "type": "string",
+            "description": "Version of the model config spec.",
+            "enum": [
+                "1.0"
+            ]
+        },
         "architecture": {
             "type": "string",
             "description": "Architecture of the model (Use TIMM names)"
@@ -54,6 +61,7 @@
         }
     },
     "required": [
+        "spec_version",
         "architecture",
         "num_classes",
         "patch_size_pixels",

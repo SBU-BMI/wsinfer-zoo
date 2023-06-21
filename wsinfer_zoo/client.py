@@ -10,15 +10,7 @@ import jsonschema
 import requests
 from huggingface_hub import hf_hub_download
 
-# TODO: we might consider fetching available models from the web.
-# from huggingface_hub import HfApi
-# hf_api = HfApi()
-# models = hf_api.list_models(author="kaczmarj")
-# print("Found these models...")
-# print(models)
-
-# FIXME: consider changing the name of this file because perhaps there will
-# be multiple configs? Or add a key inside the json map 'wsinfer_config'.
+# The name of the configuration JSON file.
 HF_CONFIG_NAME = "config.json"
 # The name of the torchscript saved file.
 HF_TORCHSCRIPT_NAME = "torchscript_model.pt"
@@ -32,26 +24,7 @@ WSINFER_ZOO_REGISTRY_URL = "https://raw.githubusercontent.com/SBU-BMI/wsinfer-zo
 # The path to the registry file.
 WSINFER_ZOO_REGISTRY_DEFAULT_PATH = Path.home() / ".wsinfer-zoo-registry.json"
 
-
 _here = Path(__file__).parent.resolve()
-
-# Load schema for model config JSON files.
-MODEL_CONFIG_SCHEMA_PATH = _here / "schemas" / "model-config.schema.json"
-if not MODEL_CONFIG_SCHEMA_PATH.exists():
-    raise FileNotFoundError(
-        f"JSON schema for model configurations not found: {MODEL_CONFIG_SCHEMA_PATH}"
-    )
-with open(MODEL_CONFIG_SCHEMA_PATH) as f:
-    MODEL_CONFIG_SCHEMA = json.load(f)
-
-# Load schema for model zoo file.
-WSINFER_ZOO_SCHEMA_PATH = _here / "schemas" / "wsinfer-zoo-registry.schema.json"
-if not WSINFER_ZOO_SCHEMA_PATH.exists():
-    raise FileNotFoundError(
-        f"JSON schema for wsinfer zoo not found: {WSINFER_ZOO_SCHEMA_PATH}"
-    )
-with open(WSINFER_ZOO_SCHEMA_PATH) as f:
-    WSINFER_ZOO_SCHEMA = json.load(f)
 
 
 class WSInferZooException(Exception):
@@ -64,6 +37,41 @@ class InvalidRegistryConfiguration(WSInferZooException):
 
 class InvalidModelConfiguration(WSInferZooException):
     ...
+
+
+def validate_config_json(instance: object):
+    """Raise an error if the model configuration JSON is invalid. Otherwise return True."""
+    schema_path = _here / "schemas" / "model-config.schema.json"
+    if not schema_path.exists():
+        raise FileNotFoundError(
+            f"JSON schema for model configurations not found: {schema_path}"
+        )
+    with open(schema_path) as f:
+        schema = json.load(f)
+    try:
+        jsonschema.validate(instance, schema=schema)
+    except jsonschema.ValidationError as e:
+        raise InvalidModelConfiguration(
+            "Invalid model configuration. See traceback above for details."
+        ) from e
+
+    return True
+
+
+def validate_model_zoo_json(instance: object):
+    """Raise an error if the model zoo registry JSON is invalid. Otherwise return True."""
+    schema_path = _here / "schemas" / "wsinfer-zoo-registry.schema.json"
+    if not schema_path.exists():
+        raise FileNotFoundError(f"JSON schema for wsinfer zoo not found: {schema_path}")
+    with open(schema_path) as f:
+        schema = json.load(f)
+    try:
+        jsonschema.validate(instance, schema=schema)
+    except jsonschema.ValidationError as e:
+        raise InvalidRegistryConfiguration(
+            "Invalid model zoo registry configuration. See traceback above for details."
+        ) from e
+    return True
 
 
 @dataclasses.dataclass
@@ -95,12 +103,7 @@ class ModelConfiguration:
 
     @classmethod
     def from_dict(cls, config: Dict) -> "ModelConfiguration":
-        try:
-            jsonschema.validate(config, schema=MODEL_CONFIG_SCHEMA)
-        except jsonschema.ValidationError as e:
-            raise InvalidModelConfiguration(
-                "Invalid model configuration. See traceback above for details."
-            ) from e
+        validate_config_json(config)
         architecture = config["architecture"]
         num_classes = config["num_classes"]
         patch_size_pixels = config["patch_size_pixels"]
@@ -254,13 +257,7 @@ class ModelRegistry:
     @classmethod
     def from_dict(cls, config: Dict) -> "ModelRegistry":
         """Create a new ModelRegistry instance from a dictionary."""
-        try:
-            jsonschema.validate(instance=config, schema=WSINFER_ZOO_SCHEMA)
-        except jsonschema.ValidationError as e:
-            raise InvalidModelConfiguration(
-                "Model configuration is invalid. Read the traceback above for"
-                " more information about the case."
-            ) from e
+        validate_model_zoo_json(config)
         models = {
             name: RegisteredModel(
                 name=name,
