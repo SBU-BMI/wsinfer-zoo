@@ -14,6 +14,7 @@ from wsinfer_zoo.client import HF_WEIGHTS_PICKLE_NAME
 from wsinfer_zoo.client import HF_WEIGHTS_SAFETENSORS_NAME
 from wsinfer_zoo.client import InvalidModelConfiguration
 from wsinfer_zoo.client import InvalidRegistryConfiguration
+from wsinfer_zoo.client import Model
 from wsinfer_zoo.client import load_registry
 from wsinfer_zoo.client import validate_config_json
 
@@ -96,6 +97,7 @@ def get(*, model_name: str, weights_format: str, registry_file: str):
 
     registered_model = registry.get_model_by_name(model_name)
 
+    model: Model
     if weights_format == "torchscript":
         model = registered_model.load_model_torchscript()
     elif weights_format == "pytorch":
