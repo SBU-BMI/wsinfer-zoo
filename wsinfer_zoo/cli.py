@@ -63,10 +63,12 @@ def ls(*, as_json: bool, registry_file: str):
 
 
 @cli.command()
+@click.argument("model-name")
 @click.option(
-    "--model-name",
-    required=True,
-    help="Number of the model to get. See `ls` to list model names",
+    "--format",
+    "weights_format",
+    default="torchscript",
+    type=click.Choice(["torchscript", "pytorch", "safetensors"]),
 )
 @click.option(
     "--registry-file",
@@ -75,8 +77,11 @@ def ls(*, as_json: bool, registry_file: str):
     help="Path to a local registry JSON file. By default, fetches remote"
     " registry file from HuggingFace.",
 )
-def get(*, model_name: str, registry_file: str):
+def get(*, model_name: str, weights_format: str, registry_file: str):
     """Retrieve a model and its configuration.
+
+    MODEL_NAME is the name of the model to get. See 'wsinfer-zoo ls'
+    for a list of available models.
 
     Outputs JSON with model configuration, path to the model, and origin of the model.
     The pretrained model is downloaded to a cache and reused if it is already present.
@@ -90,7 +95,16 @@ def get(*, model_name: str, registry_file: str):
         )
 
     registered_model = registry.get_model_by_name(model_name)
-    model = registered_model.load_model_torchscript()
+
+    if weights_format == "torchscript":
+        model = registered_model.load_model_torchscript()
+    elif weights_format == "pytorch":
+        model = registered_model.load_model_weights(safetensors=False)
+    elif weights_format == "safetensors":
+        model = registered_model.load_model_weights(safetensors=True)
+    else:
+        raise ValueError(f"unknown weights format value '{weights_format}'")
+
     model_dict = dataclasses.asdict(model)
     model_json = json.dumps(model_dict)
     click.echo(model_json)
