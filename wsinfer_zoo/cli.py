@@ -3,66 +3,43 @@
 import dataclasses
 import json
 import sys
-from pathlib import Path
 
 import click
 import huggingface_hub
-import requests
 import tabulate
 
-from wsinfer_zoo.client import (
-    WSINFER_ZOO_REGISTRY_DEFAULT_PATH,
-    HF_CONFIG_NAME,
-    HF_WEIGHTS_SAFETENSORS_NAME,
-    HF_WEIGHTS_PICKLE_NAME,
-    HF_TORCHSCRIPT_NAME,
-    InvalidModelConfiguration,
-    InvalidRegistryConfiguration,
-    ModelRegistry,
-    validate_model_zoo_json,
-    validate_config_json,
-)
+from wsinfer_zoo.client import HF_CONFIG_NAME
+from wsinfer_zoo.client import HF_TORCHSCRIPT_NAME
+from wsinfer_zoo.client import HF_WEIGHTS_PICKLE_NAME
+from wsinfer_zoo.client import HF_WEIGHTS_SAFETENSORS_NAME
+from wsinfer_zoo.client import InvalidModelConfiguration
+from wsinfer_zoo.client import InvalidRegistryConfiguration
+from wsinfer_zoo.client import load_registry
+from wsinfer_zoo.client import validate_config_json
 
 
 @click.group()
-@click.option(
-    "--registry-file",
-    type=click.Path(path_type=Path),
-    help="Path to the JSON file listing the models in the WSInfer zoo.",
-    default=WSINFER_ZOO_REGISTRY_DEFAULT_PATH,
-    envvar="WSINFER_ZOO_REGISTRY",
-)
-@click.pass_context
-def cli(ctx: click.Context, *, registry_file: Path):
-    registry_file = registry_file.expanduser()
-    if not registry_file.exists():
-        raise click.ClickException(f"registry file not found: {registry_file}")
-    with open(registry_file) as f:
-        d = json.load(f)
-    # Raise an error if validation fails.
-    try:
-        validate_model_zoo_json(d)
-    except InvalidRegistryConfiguration as e:
-        raise InvalidRegistryConfiguration(
-            "Registry schema is invalid. Please contact the developer by"
-            " creating a new issue on our GitHub page:"
-            " https://github.com/SBU-BMI/wsinfer-zoo/issues/new."
-        ) from e
-    registry = ModelRegistry.from_dict(d)
-    ctx.ensure_object(dict)
-    ctx.obj["registry"] = registry
+@click.version_option()
+def cli():
+    pass
 
 
 @cli.command()
 @click.option("--json", "as_json", is_flag=True, help="Print as JSON lines")
-@click.pass_context
-def ls(ctx: click.Context, *, as_json: bool):
+@click.option(
+    "--registry-file",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to a local registry JSON file. By default, fetches remote"
+    " registry file from HuggingFace.",
+)
+def ls(*, as_json: bool, registry_file: str):
     """List registered models.
 
     If not a TTY, only model names are printed. If a TTY, a pretty table
     of models is printed.
     """
-    registry: ModelRegistry = ctx.obj["registry"]
+    registry = load_registry(registry_file=registry_file)
     if as_json:
         for m in registry.models.values():
             click.echo(json.dumps(dataclasses.asdict(m)))
@@ -86,19 +63,30 @@ def ls(ctx: click.Context, *, as_json: bool):
 
 
 @cli.command()
+@click.argument("model-name")
 @click.option(
-    "--model-name",
-    required=True,
-    help="Number of the model to get. See `ls` to list model names",
+    "--format",
+    "weights_format",
+    default="torchscript",
+    type=click.Choice(["torchscript", "pytorch", "safetensors"]),
 )
-@click.pass_context
-def get(ctx: click.Context, *, model_name: str):
+@click.option(
+    "--registry-file",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to a local registry JSON file. By default, fetches remote"
+    " registry file from HuggingFace.",
+)
+def get(*, model_name: str, weights_format: str, registry_file: str):
     """Retrieve a model and its configuration.
+
+    MODEL_NAME is the name of the model to get. See 'wsinfer-zoo ls'
+    for a list of available models.
 
     Outputs JSON with model configuration, path to the model, and origin of the model.
     The pretrained model is downloaded to a cache and reused if it is already present.
     """
-    registry: ModelRegistry = ctx.obj["registry"]
+    registry = load_registry(registry_file=registry_file)
     if model_name not in registry.models.keys():
         raise click.ClickException(
             f"'{model_name}' not found, available models are"
@@ -107,7 +95,16 @@ def get(ctx: click.Context, *, model_name: str):
         )
 
     registered_model = registry.get_model_by_name(model_name)
-    model = registered_model.load_model_torchscript()
+
+    if weights_format == "torchscript":
+        model = registered_model.load_model_torchscript()
+    elif weights_format == "pytorch":
+        model = registered_model.load_model_weights(safetensors=False)
+    elif weights_format == "safetensors":
+        model = registered_model.load_model_weights(safetensors=True)
+    else:
+        raise ValueError(f"unknown weights format value '{weights_format}'")
+
     model_dict = dataclasses.asdict(model)
     model_json = json.dumps(model_dict)
     click.echo(model_json)
@@ -165,8 +162,8 @@ def validate_repo(*, huggingface_repo_id: str, revision: str):
             fg="red",
         )
         sys.exit(1)
-    except requests.RequestException as e:
-        click.echo("Error with request: {e}")
+    except huggingface_hub.utils.HfHubHTTPError as e:
+        click.echo(f"Error with request: {e}")
         click.echo("Please try again.")
         sys.exit(2)
 
@@ -194,7 +191,8 @@ def validate_repo(*, huggingface_repo_id: str, revision: str):
             "This file contains the weights of the pre-trained model in normal PyTorch"
             " format. Once you have a trained model, create this file with"
             f'\n\n    torch.save(model.state_dict(), "{HF_WEIGHTS_PICKLE_NAME}")'
-            f"\n\n    Then, upload the file to the HuggingFace model repo at {repo_url}",
+            "\n\n    Then, upload the file to the HuggingFace model repo at"
+            f" {repo_url}",
         ),
         (
             HF_WEIGHTS_SAFETENSORS_NAME,
@@ -203,7 +201,8 @@ def validate_repo(*, huggingface_repo_id: str, revision: str):
             " concerns that Pickle files (pytorch default) have. To create the file:"
             "\n\n    from safetensors.torch import save_file"
             f'\n     save_file(model.state_dict(), "{HF_WEIGHTS_SAFETENSORS_NAME}")'
-            f"\n\n    Then, upload the file to the HuggingFace model repo at {repo_url}",
+            "\n\n    Then, upload the file to the HuggingFace model repo at"
+            f" {repo_url}",
         ),
     ]
 
@@ -211,7 +210,8 @@ def validate_repo(*, huggingface_repo_id: str, revision: str):
     for name, help_msg in filenames_and_help:
         if name not in file_info:
             click.secho(
-                f"Required file '{name}' not found in HuggingFace model repo '{repo_id}'",
+                f"Required file '{name}' not found in HuggingFace model repo"
+                f" '{repo_id}'",
                 fg="red",
             )
             click.echo(f"    {help_msg}")
@@ -231,9 +231,10 @@ def validate_repo(*, huggingface_repo_id: str, revision: str):
         config_dict = json.load(f)
     try:
         validate_config_json(config_dict)
-    except InvalidModelConfiguration as e:
+    except InvalidModelConfiguration:
         click.secho(
-            "Model configuration JSON file is invalid. Use 'wsinfer_zoo validate-config'"
+            "Model configuration JSON file is invalid. Use 'wsinfer_zoo"
+            " validate-config'"
             " with the configuration file to debug this further.",
             fg="red",
         )
