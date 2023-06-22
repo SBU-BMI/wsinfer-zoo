@@ -1,15 +1,18 @@
 """API to interact with WSInfer model zoo, hosted on HuggingFace."""
 
 import dataclasses
+import functools
 import json
-from datetime import datetime
-from pathlib import Path
 import sys
-from typing import Any, Dict, List, Optional, Sequence
-import warnings
+from pathlib import Path
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
+from typing import Sequence
+from typing import Union
 
 import jsonschema
-import requests
 from huggingface_hub import hf_hub_download
 
 # The name of the configuration JSON file.
@@ -21,10 +24,10 @@ HF_WEIGHTS_SAFETENSORS_NAME = "model.safetensors"
 # The name of the pytorch (pickle) file with weights.
 HF_WEIGHTS_PICKLE_NAME = "pytorch_model.bin"
 
-# URL to the latest model registry.
-WSINFER_ZOO_REGISTRY_URL = "https://raw.githubusercontent.com/SBU-BMI/wsinfer-zoo/main/wsinfer-zoo-registry.json"  # noqa
 # The path to the registry file.
-WSINFER_ZOO_REGISTRY_DEFAULT_PATH = Path.home() / ".wsinfer-zoo-registry.json"
+WSINFER_ZOO_REGISTRY_DEFAULT_PATH = (
+    Path.home() / ".wsinfer-zoo" / "wsinfer-zoo-registry.json"
+)
 
 # In pyinstaller runtime for one-file executables, the root path
 # is the path to the executable.
@@ -47,7 +50,9 @@ class InvalidModelConfiguration(WSInferZooException):
 
 
 def validate_config_json(instance: object):
-    """Raise an error if the model configuration JSON is invalid. Otherwise return True."""
+    """Raise an error if the model configuration JSON is invalid. Otherwise return
+    True.
+    """
     schema_path = _here / "schemas" / "model-config.schema.json"
     if not schema_path.exists():
         raise FileNotFoundError(
@@ -66,7 +71,9 @@ def validate_config_json(instance: object):
 
 
 def validate_model_zoo_json(instance: object):
-    """Raise an error if the model zoo registry JSON is invalid. Otherwise return True."""
+    """Raise an error if the model zoo registry JSON is invalid. Otherwise return
+    True.
+    """
     schema_path = _here / "schemas" / "wsinfer-zoo-registry.schema.json"
     if not schema_path.exists():
         raise FileNotFoundError(f"JSON schema for wsinfer zoo not found: {schema_path}")
@@ -278,40 +285,43 @@ class ModelRegistry:
         return cls(models=models)
 
 
-def _remote_registry_is_newer() -> bool:
-    """Return `True` if the remote registry is newer than local, `False` otherwise."""
-    # Local file does not exist, so we should download it.
-    if not WSINFER_ZOO_REGISTRY_DEFAULT_PATH.exists():
-        return True
+@functools.cache
+def load_registry(registry_file: Optional[Union[str, Path]] = None) -> ModelRegistry:
+    """Load model registry.
 
-    url = "https://api.github.com/repos/SBU-BMI/wsinfer-zoo/commits?path=wsinfer-zoo-registry.json&page=1&per_page=1"  # noqa
-    resp = requests.get(url)
-    if not resp.ok:
-        raise requests.RequestException(
-            "could not get the last updated time of the remote model registry file"
-        )
-    remote_commit_date = resp.json()[0]["commit"]["committer"]["date"]
-    if remote_commit_date.endswith("Z"):
-        remote_commit_date = remote_commit_date[:-1] + "+00:00"
-    remote_mtime = datetime.fromisoformat(remote_commit_date)
+    This downloads the registry JSON file to a cache and reuses it if
+    the remote file is the same as the cached file.
 
-    # Defaults to local time zone.
-    local_mtime = datetime.fromtimestamp(
-        WSINFER_ZOO_REGISTRY_DEFAULT_PATH.stat().st_mtime
-    ).astimezone()
-
-    remote_is_newer = remote_mtime > local_mtime
-    return remote_is_newer
-
-
-def _download_registry_if_necessary():
-    """Download the wsinfer zoo registry from the web if
-    1. a local version is not found,
-    2. the web version is newer than local.
+    If registry_file is not None, it should be a path to a JSON file. This will be
+    preferred over the remote registry file on HuggingFace.
     """
+    if registry_file is None:
+        path = hf_hub_download(
+            repo_id="kaczmarj/wsinfer-model-zoo-json",
+            filename="wsinfer-zoo-registry.json",
+            revision="main",
+            repo_type="dataset",
+            local_dir=WSINFER_ZOO_REGISTRY_DEFAULT_PATH.parent,
+        )
+        if not Path(WSINFER_ZOO_REGISTRY_DEFAULT_PATH).exists():
+            raise FileNotFoundError(
+                "Expected registry to be saved to"
+                f" {WSINFER_ZOO_REGISTRY_DEFAULT_PATH} but was saved instead to {path}"
+            )
+    else:
+        if not Path(registry_file).exists():
+            raise FileNotFoundError(f"registry file not found at {registry_file}")
+        path = registry_file
+
+    with open(path) as f:
+        registry = json.load(f)
     try:
-        if _remote_registry_is_newer():
-            r = requests.get(WSINFER_ZOO_REGISTRY_URL)
-            WSINFER_ZOO_REGISTRY_DEFAULT_PATH.write_bytes(r.content)
-    except requests.RequestException as e:
-        warnings.warn(f"Could not download most recent registry, error: {e}")
+        validate_model_zoo_json(registry)
+    except InvalidRegistryConfiguration as e:
+        raise InvalidRegistryConfiguration(
+            "Registry schema is invalid. Please contact the developer by"
+            " creating a new issue on our GitHub page:"
+            " https://github.com/SBU-BMI/wsinfer-zoo/issues/new."
+        ) from e
+
+    return ModelRegistry.from_dict(registry)
