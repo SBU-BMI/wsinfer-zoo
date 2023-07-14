@@ -285,7 +285,7 @@ class ModelRegistry:
         return cls(models=models)
 
 
-@functools.cache
+@functools.lru_cache()
 def load_registry(registry_file: Optional[Union[str, Path]] = None) -> ModelRegistry:
     """Load model registry.
 
