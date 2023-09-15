@@ -1,5 +1,7 @@
 """Command-line interface for the WSInfer model zoo."""
 
+from __future__ import annotations
+
 import dataclasses
 import json
 import sys
