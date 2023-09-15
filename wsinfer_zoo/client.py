@@ -28,6 +28,7 @@ HF_WEIGHTS_PICKLE_NAME = "pytorch_model.bin"
 WSINFER_ZOO_REGISTRY_DEFAULT_PATH = (
     Path.home() / ".wsinfer-zoo" / "wsinfer-zoo-registry.json"
 )
+WSINFER_ZOO_REGISTRY_DEFAULT_PATH.parent.mkdir(exist_ok=True)
 
 # In pyinstaller runtime for one-file executables, the root path
 # is the path to the executable.
